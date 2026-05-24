@@ -233,24 +233,33 @@
 
     resultsEl.innerHTML = '';
     ranked.forEach(function (s) {
-      var firstStart = T.addDays(state.trip.start, s.startD);
-      var firstEnd = T.addDays(state.trip.start, s.startD + N - 1);
-      var lastDay = T.addDays(state.trip.start, s.endD + N - 1);
+      var spanStart = T.addDays(state.trip.start, s.startD);
+      var spanEnd = T.addDays(state.trip.start, s.endD + N - 1);
 
       var div = document.createElement('div');
       div.className = 'result';
 
-      var dateLine = fmt(firstStart) + ' – ' + fmt(firstEnd) + ' <span class="muted">(' + N + ' days)</span>';
+      // The bold header shows the full span. For a single placement that span
+      // IS the N-day block; for a collapsed run it's the whole flexible window.
+      var dateLine, flexText = null;
+      if (s.placements === 1) {
+        dateLine = fmt(spanStart) + ' – ' + fmt(spanEnd) + ' <span class="muted">(' + N + ' days)</span>';
+      } else {
+        var spanDays = s.endD - s.startD + N;
+        dateLine = fmt(spanStart) + ' – ' + fmt(spanEnd) +
+          ' <span class="muted">(' + spanDays + '-day window)</span>';
+        flexText = 'Flexible: any ' + N + '-day block in this window works for the same group (' +
+          s.placements + ' placements).';
+      }
 
       div.innerHTML =
         '<div><span class="score">' + s.score + ' of ' + pool + '</span>' +
         '<span class="dates">' + dateLine + '</span></div>';
 
-      if (s.placements > 1) {
+      if (flexText) {
         var flex = document.createElement('div');
         flex.className = 'flex';
-        flex.textContent = 'Flexible: any ' + N + '-day block between ' + fmt(firstStart) +
-          ' and ' + fmt(lastDay) + ' works for the same group (' + s.placements + ' placements).';
+        flex.textContent = flexText;
         div.appendChild(flex);
       }
 
