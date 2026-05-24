@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mark your availability</title>
 <style>
-  :root { --accent: #2563eb; --free: #bfdbfe; --free-border: #2563eb; --bg: #f8fafc; --line: #e2e8f0; }
+  :root { --accent: #2563eb; --free: #bfdbfe; --free-border: #2563eb;
+          --busy: #fecaca; --busy-border: #dc2626; --bg: #f8fafc; --line: #e2e8f0; }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
          margin: 0; background: var(--bg); color: #0f172a; line-height: 1.5; }
@@ -27,7 +28,16 @@
          border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 0.85rem;
          cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; }
   .day.free { background: var(--free); border-color: var(--free-border); font-weight: 600; }
+  .day.busy { background: var(--busy); border-color: var(--busy-border); font-weight: 600;
+              color: #991b1b; text-decoration: line-through; }
   .day.blank { border: none; background: transparent; cursor: default; }
+  .modes { display: flex; align-items: center; gap: 8px; margin: 16px 0 6px; flex-wrap: wrap; }
+  .modes .mlabel { font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .seg button { padding: 6px 16px; border: none; background: #fff; cursor: pointer; font-size: 0.85rem; }
+  .seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+  .seg button.busyon { background: var(--busy-border); color: #fff; font-weight: 600; }
+  .mode-caption { font-size: 0.8rem; color: #64748b; margin: 0 0 4px; }
   .codebar { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--line);
              padding: 12px 16px; box-shadow: 0 -2px 8px rgba(0,0,0,0.04); }
   .codebar .inner { max-width: 720px; margin: 0 auto; }
@@ -50,6 +60,15 @@
 
     <label for="name">Your name</label>
     <input type="text" id="name" placeholder="e.g. Dave" autocomplete="off">
+
+    <div class="modes">
+      <span class="mlabel">Mark the days I'm</span>
+      <span class="seg">
+        <button data-mode="free" class="on">Free</button>
+        <button data-mode="busy">Busy</button>
+      </span>
+    </div>
+    <p class="mode-caption" id="modeCaption"></p>
 
     <div class="helpers">
       <button data-act="all">Select all</button>
@@ -100,6 +119,7 @@
   }
 
   var free = new Array(trip.days).fill(false);
+  var mode = 'free'; // 'free' = mark free days; 'busy' = mark busy days, rest free
 
   function fmt(iso) {
     var p = iso.split('-');
@@ -165,12 +185,43 @@
 
   function render() {
     for (var k in cells) {
-      cells[k].classList.toggle('free', free[k]);
+      // In free mode we highlight free days (blue); in busy mode we highlight
+      // busy days (red) and leave free days plain. Same `free` array either way.
+      cells[k].classList.toggle('free', mode === 'free' && free[k]);
+      cells[k].classList.toggle('busy', mode === 'busy' && !free[k]);
     }
-    var n = free.filter(Boolean).length;
-    document.getElementById('count').textContent =
-      n + (n === 1 ? ' day' : ' days') + ' selected — send this code to your organizer.';
+    var freeCount = free.filter(Boolean).length;
+    var busyCount = free.length - freeCount;
+    var msg;
+    if (mode === 'free') {
+      msg = freeCount + (freeCount === 1 ? ' day' : ' days') + ' free';
+    } else {
+      msg = busyCount + (busyCount === 1 ? ' day' : ' days') + ' busy · ' +
+        freeCount + ' free';
+    }
+    document.getElementById('count').textContent = msg + ' — send this code to your organizer.';
     updateCode();
+  }
+
+  function applyModeUI() {
+    var freeBtn = document.querySelector('.seg button[data-mode="free"]');
+    var busyBtn = document.querySelector('.seg button[data-mode="busy"]');
+    freeBtn.classList.toggle('on', mode === 'free');
+    busyBtn.classList.toggle('busyon', mode === 'busy');
+    document.getElementById('modeCaption').textContent = mode === 'busy'
+      ? 'Paint the days you can’t make it. Everything you don’t mark is treated as free.'
+      : 'Paint the days you’re free. Drag across days to select a range.';
+  }
+
+  function setMode(next) {
+    if (next === mode) return;
+    var mixed = free.some(Boolean) && free.some(function (x) { return !x; });
+    if (mixed && !window.confirm('Switching will reset your calendar. Continue?')) return;
+    mode = next;
+    // Smart reset (option a): busy mode starts all-free; free mode starts empty.
+    free = free.map(function () { return mode === 'busy'; });
+    applyModeUI();
+    render();
   }
 
   function updateCode() {
@@ -233,6 +284,12 @@
   }, { passive: false });
   window.addEventListener('touchend', endPaint);
 
+  // --- mode toggle (Free / Busy) ---
+  document.querySelector('.seg').addEventListener('click', function (e) {
+    var next = e.target.dataset && e.target.dataset.mode;
+    if (next) setMode(next);
+  });
+
   // --- quick helpers ---
   document.querySelector('.helpers').addEventListener('click', function (e) {
     var act = e.target.dataset && e.target.dataset.act;
@@ -259,6 +316,7 @@
     setTimeout(function () { btn.textContent = prev; }, 1500);
   });
 
+  applyModeUI();
   render();
 })();
 </script>
