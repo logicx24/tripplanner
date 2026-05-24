@@ -187,6 +187,52 @@ test('analyze excludes a named person and re-ranks the pool', () => {
   assert.deepStrictEqual(top.attendees, ['Alice', 'Bob']);
 });
 
+// ---------- paintRange (drag-to-select range fill) ----------
+
+test('paintRange fills the whole contiguous range between anchor and current', () => {
+  const baseline = new Array(20).fill(false);
+  const out = T.paintRange(baseline, 7, 16, true);
+  for (let i = 0; i < 20; i++) {
+    assert.strictEqual(out[i], i >= 7 && i <= 16, 'index ' + i);
+  }
+});
+
+test('paintRange works when dragging backwards (current < anchor)', () => {
+  const baseline = new Array(20).fill(false);
+  const out = T.paintRange(baseline, 16, 7, true);
+  for (let i = 0; i < 20; i++) {
+    assert.strictEqual(out[i], i >= 7 && i <= 16, 'index ' + i);
+  }
+});
+
+test('paintRange recomputes from baseline so shrinking the drag reverts cells', () => {
+  const baseline = new Array(20).fill(false);
+  // First the user dragged 7..16, but the live drag is recomputed each move from
+  // the SAME baseline, so dragging back to 10 must leave 11..16 unselected.
+  const out = T.paintRange(baseline, 7, 10, true);
+  for (let i = 0; i < 20; i++) {
+    assert.strictEqual(out[i], i >= 7 && i <= 10, 'index ' + i);
+  }
+});
+
+test('paintRange can clear a range (value=false) without touching cells outside it', () => {
+  const baseline = new Array(10).fill(true);
+  const out = T.paintRange(baseline, 3, 5, false);
+  assert.deepStrictEqual(out, [true, true, true, false, false, false, true, true, true, true]);
+});
+
+test('paintRange handles a single cell (anchor === current)', () => {
+  const baseline = new Array(5).fill(false);
+  assert.deepStrictEqual(T.paintRange(baseline, 2, 2, true), [false, false, true, false, false]);
+});
+
+test('paintRange does not mutate the baseline array', () => {
+  const baseline = new Array(5).fill(false);
+  const copy = baseline.slice();
+  T.paintRange(baseline, 0, 4, true);
+  assert.deepStrictEqual(baseline, copy);
+});
+
 // ---------- addDays (absolute date math) ----------
 
 test('addDays handles zero, month rollover, year rollover, and non-leap Feb', () => {

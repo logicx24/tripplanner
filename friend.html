@@ -180,50 +180,58 @@
     input.value = T.encodeFriendCode({ trip: token, name: name, free: free });
   }
 
-  // --- painting interaction (mouse + touch) ---
-  var painting = false, paintVal = true;
+  // --- painting interaction (anchor-based range fill; mouse + touch) ---
+  // Drag selects the whole date range between where you pressed and where the
+  // cursor is now — not just the cells the pointer physically crosses — so a
+  // drag from day 7 to day 16 fills every day in between, across week rows.
+  var painting = false, paintAnchor = 0, paintVal = true, paintBaseline = null;
 
-  function setCell(el) {
-    if (!el || !el.dataset || el.dataset.idx === undefined) return;
-    var idx = +el.dataset.idx;
-    if (free[idx] !== paintVal) { free[idx] = paintVal; render(); }
+  function idxOf(el) {
+    if (!el || !el.classList || !el.classList.contains('day') || el.classList.contains('blank')) return null;
+    return el.dataset.idx === undefined ? null : +el.dataset.idx;
   }
-  function cellFromPoint(x, y) {
-    var el = document.elementFromPoint(x, y);
-    return el && el.classList.contains('day') && !el.classList.contains('blank') ? el : null;
+  function dayUnder(x, y) { return document.elementFromPoint(x, y); }
+
+  function startPaint(idx) {
+    painting = true;
+    paintAnchor = idx;
+    paintVal = !free[idx];        // toggle relative to the anchor cell
+    paintBaseline = free.slice(); // snapshot, so each move recomputes cleanly
+    dragTo(idx);
   }
+  function dragTo(idx) {
+    if (!painting || idx === null) return;
+    free = T.paintRange(paintBaseline, paintAnchor, idx, paintVal);
+    render();
+  }
+  function endPaint() { painting = false; paintBaseline = null; }
 
   calEl.addEventListener('mousedown', function (e) {
-    var el = e.target.closest ? e.target.closest('.day') : null;
-    if (!el || el.classList.contains('blank')) return;
+    var idx = idxOf(e.target.closest ? e.target.closest('.day') : null);
+    if (idx === null) return;
     e.preventDefault();
-    painting = true;
-    paintVal = !free[+el.dataset.idx]; // toggle relative to the first cell
-    setCell(el);
+    startPaint(idx);
   });
   calEl.addEventListener('mouseover', function (e) {
     if (!painting) return;
-    var el = e.target.closest ? e.target.closest('.day') : null;
-    if (el && !el.classList.contains('blank')) setCell(el);
+    dragTo(idxOf(e.target.closest ? e.target.closest('.day') : null));
   });
-  window.addEventListener('mouseup', function () { painting = false; });
+  window.addEventListener('mouseup', endPaint);
 
   calEl.addEventListener('touchstart', function (e) {
     var t = e.touches[0];
-    var el = cellFromPoint(t.clientX, t.clientY);
-    if (!el) return;
+    var idx = idxOf(dayUnder(t.clientX, t.clientY));
+    if (idx === null) return;
     e.preventDefault();
-    painting = true;
-    paintVal = !free[+el.dataset.idx];
-    setCell(el);
+    startPaint(idx);
   }, { passive: false });
   calEl.addEventListener('touchmove', function (e) {
     if (!painting) return;
     e.preventDefault();
     var t = e.touches[0];
-    setCell(cellFromPoint(t.clientX, t.clientY));
+    dragTo(idxOf(dayUnder(t.clientX, t.clientY)));
   }, { passive: false });
-  window.addEventListener('touchend', function () { painting = false; });
+  window.addEventListener('touchend', endPaint);
 
   // --- quick helpers ---
   document.querySelector('.helpers').addEventListener('click', function (e) {
