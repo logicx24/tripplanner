@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mark your availability</title>
+<style>
+  :root { --accent: #2563eb; --free: #bfdbfe; --free-border: #2563eb; --bg: #f8fafc; --line: #e2e8f0; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 0; background: var(--bg); color: #0f172a; line-height: 1.5; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 20px 16px 120px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: #475569; margin: 0 0 20px; }
+  label { display: block; font-weight: 600; margin: 16px 0 6px; }
+  input[type=text] { width: 100%; padding: 10px 12px; font-size: 1rem; border: 1px solid var(--line);
+                     border-radius: 8px; }
+  .helpers { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+  .helpers button { padding: 6px 12px; border: 1px solid var(--line); background: #fff; border-radius: 999px;
+                    font-size: 0.85rem; cursor: pointer; }
+  .helpers button:hover { border-color: var(--accent); color: var(--accent); }
+  .month { margin: 18px 0; }
+  .month h2 { font-size: 1rem; margin: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .dow { text-align: center; font-size: 0.7rem; color: #94a3b8; font-weight: 600; padding-bottom: 2px; }
+  .day { aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center;
+         border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 0.85rem;
+         cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .day.free { background: var(--free); border-color: var(--free-border); font-weight: 600; }
+  .day.blank { border: none; background: transparent; cursor: default; }
+  .codebar { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--line);
+             padding: 12px 16px; box-shadow: 0 -2px 8px rgba(0,0,0,0.04); }
+  .codebar .inner { max-width: 720px; margin: 0 auto; }
+  .count { font-size: 0.85rem; color: #475569; margin-bottom: 6px; }
+  .coderow { display: flex; gap: 8px; }
+  .coderow input { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem;
+                   padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .coderow button { padding: 8px 16px; background: var(--accent); color: #fff; border: none; border-radius: 8px;
+                    font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 16px; border-radius: 8px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="error" class="error hidden"></div>
+  <div id="app" class="hidden">
+    <h1 id="title"></h1>
+    <p class="sub" id="range"></p>
+
+    <label for="name">Your name</label>
+    <input type="text" id="name" placeholder="e.g. Dave" autocomplete="off">
+
+    <div class="helpers">
+      <button data-act="all">Select all</button>
+      <button data-act="none">Clear all</button>
+      <button data-act="weekends">Weekends only</button>
+    </div>
+
+    <div id="calendar"></div>
+  </div>
+</div>
+
+<div id="codebar" class="codebar hidden">
+  <div class="inner">
+    <div class="count" id="count"></div>
+    <div class="coderow">
+      <input type="text" id="code" readonly>
+      <button id="copy">Copy</button>
+    </div>
+  </div>
+</div>
+
+<script src="shared.js"></script>
+<script>
+(function () {
+  'use strict';
+  var T = window.TripPoller;
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var DOW = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+
+  function showError(msg) {
+    var e = document.getElementById('error');
+    e.textContent = msg;
+    e.classList.remove('hidden');
+  }
+
+  // --- parse trip from URL ---
+  var params = new URLSearchParams(location.search);
+  var token = params.get('trip');
+  var trip;
+  if (!token) {
+    showError('This link is missing trip info — ask the organizer for the link they generated.');
+    return;
+  }
+  try { trip = T.decodeTripToken(token); }
+  catch (err) {
+    showError('This trip link looks corrupted — ask the organizer to resend it.');
+    return;
+  }
+
+  var free = new Array(trip.days).fill(false);
+
+  function fmt(iso) {
+    var p = iso.split('-');
+    return MONTHS[+p[1] - 1] + ' ' + (+p[2]);
+  }
+  function fmtFull(iso) {
+    var p = iso.split('-');
+    return MONTHS[+p[1] - 1] + ' ' + (+p[2]) + ', ' + p[0];
+  }
+
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('codebar').classList.remove('hidden');
+  document.getElementById('title').textContent = 'Mark your availability for ' + trip.name;
+  document.getElementById('range').textContent =
+    fmtFull(trip.start) + ' – ' + fmtFull(T.addDays(trip.start, trip.days - 1));
+
+  // --- build calendar, grouped by month ---
+  var calEl = document.getElementById('calendar');
+  var cells = {}; // dayIndex -> element
+
+  (function buildCalendar() {
+    var i = 0;
+    while (i < trip.days) {
+      var iso = T.addDays(trip.start, i);
+      var parts = iso.split('-').map(Number);
+      var year = parts[0], month = parts[1];
+
+      var monthDiv = document.createElement('div');
+      monthDiv.className = 'month';
+      var h = document.createElement('h2');
+      h.textContent = MONTHS[month - 1] + ' ' + year;
+      monthDiv.appendChild(h);
+
+      var grid = document.createElement('div');
+      grid.className = 'grid';
+      DOW.forEach(function (d) {
+        var c = document.createElement('div'); c.className = 'dow'; c.textContent = d; grid.appendChild(c);
+      });
+
+      // leading blanks for first weekday of this month-run
+      var firstDow = new Date(Date.UTC(year, month - 1, parts[2])).getUTCDay();
+      for (var b = 0; b < firstDow; b++) {
+        var blank = document.createElement('div'); blank.className = 'day blank'; grid.appendChild(blank);
+      }
+
+      // days until the month changes or range ends
+      while (i < trip.days) {
+        var diso = T.addDays(trip.start, i);
+        var dp = diso.split('-').map(Number);
+        if (dp[1] !== month) break;
+        var cell = document.createElement('div');
+        cell.className = 'day';
+        cell.textContent = dp[2];
+        cell.dataset.idx = i;
+        cells[i] = cell;
+        grid.appendChild(cell);
+        i++;
+      }
+      monthDiv.appendChild(grid);
+      calEl.appendChild(monthDiv);
+    }
+  })();
+
+  function render() {
+    for (var k in cells) {
+      cells[k].classList.toggle('free', free[k]);
+    }
+    var n = free.filter(Boolean).length;
+    document.getElementById('count').textContent =
+      n + (n === 1 ? ' day' : ' days') + ' selected — send this code to your organizer.';
+    updateCode();
+  }
+
+  function updateCode() {
+    var name = document.getElementById('name').value.trim();
+    var input = document.getElementById('code');
+    if (!name) { input.value = ''; input.placeholder = 'Enter your name to generate your code'; return; }
+    input.value = T.encodeFriendCode({ trip: token, name: name, free: free });
+  }
+
+  // --- painting interaction (mouse + touch) ---
+  var painting = false, paintVal = true;
+
+  function setCell(el) {
+    if (!el || !el.dataset || el.dataset.idx === undefined) return;
+    var idx = +el.dataset.idx;
+    if (free[idx] !== paintVal) { free[idx] = paintVal; render(); }
+  }
+  function cellFromPoint(x, y) {
+    var el = document.elementFromPoint(x, y);
+    return el && el.classList.contains('day') && !el.classList.contains('blank') ? el : null;
+  }
+
+  calEl.addEventListener('mousedown', function (e) {
+    var el = e.target.closest ? e.target.closest('.day') : null;
+    if (!el || el.classList.contains('blank')) return;
+    e.preventDefault();
+    painting = true;
+    paintVal = !free[+el.dataset.idx]; // toggle relative to the first cell
+    setCell(el);
+  });
+  calEl.addEventListener('mouseover', function (e) {
+    if (!painting) return;
+    var el = e.target.closest ? e.target.closest('.day') : null;
+    if (el && !el.classList.contains('blank')) setCell(el);
+  });
+  window.addEventListener('mouseup', function () { painting = false; });
+
+  calEl.addEventListener('touchstart', function (e) {
+    var t = e.touches[0];
+    var el = cellFromPoint(t.clientX, t.clientY);
+    if (!el) return;
+    e.preventDefault();
+    painting = true;
+    paintVal = !free[+el.dataset.idx];
+    setCell(el);
+  }, { passive: false });
+  calEl.addEventListener('touchmove', function (e) {
+    if (!painting) return;
+    e.preventDefault();
+    var t = e.touches[0];
+    setCell(cellFromPoint(t.clientX, t.clientY));
+  }, { passive: false });
+  window.addEventListener('touchend', function () { painting = false; });
+
+  // --- quick helpers ---
+  document.querySelector('.helpers').addEventListener('click', function (e) {
+    var act = e.target.dataset && e.target.dataset.act;
+    if (!act) return;
+    if (act === 'all') free = free.map(function () { return true; });
+    else if (act === 'none') free = free.map(function () { return false; });
+    else if (act === 'weekends') {
+      free = free.map(function (_, i) {
+        var dow = new Date(T.addDays(trip.start, i) + 'T00:00:00Z').getUTCDay();
+        return dow === 0 || dow === 6;
+      });
+    }
+    render();
+  });
+
+  document.getElementById('name').addEventListener('input', updateCode);
+  document.getElementById('copy').addEventListener('click', function () {
+    var input = document.getElementById('code');
+    if (!input.value) return;
+    input.select();
+    navigator.clipboard ? navigator.clipboard.writeText(input.value) : document.execCommand('copy');
+    var btn = this; var prev = btn.textContent;
+    btn.textContent = '✓ Copied';
+    setTimeout(function () { btn.textContent = prev; }, 1500);
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
