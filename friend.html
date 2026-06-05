@@ -48,6 +48,20 @@
   .coderow button { padding: 8px 16px; background: var(--accent); color: #fff; border: none; border-radius: 8px;
                     font-weight: 600; cursor: pointer; white-space: nowrap; }
   .error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 16px; border-radius: 8px; }
+  details.resume { margin: 14px 0 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px;
+                    background: #fff; }
+  details.resume summary { cursor: pointer; font-size: 0.9rem; color: #475569; font-weight: 600; }
+  details.resume[open] summary { margin-bottom: 10px; }
+  details.resume textarea { width: 100%; padding: 8px 10px; font-family: ui-monospace, Menlo, monospace;
+                             font-size: 0.78rem; border: 1px solid var(--line); border-radius: 6px;
+                             min-height: 64px; resize: vertical; }
+  details.resume .actions { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+  details.resume button { padding: 7px 14px; background: var(--accent); color: #fff; border: none;
+                          border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+  .loadmsg { font-size: 0.85rem; }
+  .loadmsg.ok { color: #16a34a; }
+  .loadmsg.bad { color: #991b1b; }
+  .coderow button.alt { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
   .hidden { display: none; }
 </style>
 </head>
@@ -60,6 +74,15 @@
 
     <label for="name">Your name</label>
     <input type="text" id="name" placeholder="e.g. Dave" autocomplete="off">
+
+    <details class="resume" id="resume">
+      <summary>Already submitted? Paste your code to edit it.</summary>
+      <textarea id="resume-code" placeholder="paste your previously generated code here…"></textarea>
+      <div class="actions">
+        <button id="resume-load" type="button">Load code</button>
+        <span class="loadmsg" id="resume-msg"></span>
+      </div>
+    </details>
 
     <div class="modes">
       <span class="mlabel">Mark the days I'm</span>
@@ -86,6 +109,7 @@
     <div class="coderow">
       <input type="text" id="code" readonly>
       <button id="copy">Copy</button>
+      <button id="copyedit" class="alt" title="A URL that loads back what you just selected">Edit link</button>
     </div>
   </div>
 </div>
@@ -307,14 +331,83 @@
 
   document.getElementById('name').addEventListener('input', updateCode);
   document.getElementById('copy').addEventListener('click', function () {
-    var input = document.getElementById('code');
-    if (!input.value) return;
-    input.select();
-    navigator.clipboard ? navigator.clipboard.writeText(input.value) : document.execCommand('copy');
-    var btn = this; var prev = btn.textContent;
+    copyToClipboard(this, document.getElementById('code').value);
+  });
+  document.getElementById('copyedit').addEventListener('click', function () {
+    var code = document.getElementById('code').value;
+    if (!code) return;
+    // Personal edit URL: this trip + the friend's current code. Bookmarking
+    // this means "reopen my answer". Trip token stays in ?trip= so the
+    // existing hard-reject logic catches accidentally swapped tokens.
+    var url = location.origin + location.pathname + '?trip=' + token + '&code=' + code;
+    copyToClipboard(this, url);
+  });
+  function copyToClipboard(btn, text) {
+    if (!text) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(text);
+    else { var i = document.getElementById('code'); i.select(); document.execCommand('copy'); }
+    var prev = btn.textContent;
     btn.textContent = '✓ Copied';
     setTimeout(function () { btn.textContent = prev; }, 1500);
+  }
+
+  // --- load a previously generated code back into the UI ---
+  // Used by both the paste box and the ?code= URL param. Hard-rejects if the
+  // code is for a different trip — same rule the organizer applies to bulk
+  // paste, so the cross-trip namespacing is honored everywhere.
+  function loadExistingCode(raw) {
+    var code = String(raw || '').trim();
+    if (!code) return { ok: false, reason: 'No code to load.' };
+    var fc;
+    try { fc = T.decodeFriendCode(code); }
+    catch (e) { return { ok: false, reason: 'That code is unreadable.' }; }
+    if (fc.trip !== token) {
+      var other = 'a different trip';
+      try { other = T.decodeTripToken(fc.trip).name; } catch (e) {}
+      return { ok: false, reason: "That code is for '" + other + "', not '" + trip.name + "'." };
+    }
+    if (fc.free.length !== trip.days) {
+      return { ok: false, reason: 'That code is sized for a different window length.' };
+    }
+    document.getElementById('name').value = fc.name;
+    free = fc.free.slice();
+    // The loaded bitmap represents free days, so the natural editing mode is
+    // 'free' regardless of how the friend originally generated the code.
+    mode = 'free';
+    applyModeUI();
+    render();
+    return { ok: true, name: fc.name, freeCount: fc.free.filter(Boolean).length };
+  }
+
+  function showResumeMsg(ok, text) {
+    var s = document.getElementById('resume-msg');
+    s.textContent = text;
+    s.className = 'loadmsg ' + (ok ? 'ok' : 'bad');
+  }
+
+  document.getElementById('resume-load').addEventListener('click', function () {
+    var res = loadExistingCode(document.getElementById('resume-code').value);
+    if (res.ok) {
+      showResumeMsg(true, '✓ Loaded ' + res.freeCount + ' free day' +
+        (res.freeCount === 1 ? '' : 's') + ' for ' + res.name + '. Edit and copy the new code below.');
+    } else {
+      showResumeMsg(false, '✗ ' + res.reason);
+    }
   });
+
+  // --- ?code= URL param: pre-fill from a personal edit link ---
+  var preCode = params.get('code');
+  if (preCode) {
+    var pre = loadExistingCode(preCode);
+    if (pre.ok) {
+      document.getElementById('resume').open = true;
+      showResumeMsg(true, '✓ Loaded your previous selections (' + pre.freeCount +
+        ' free day' + (pre.freeCount === 1 ? '' : 's') + '). Edit below; new code updates live.');
+    } else {
+      document.getElementById('resume').open = true;
+      showResumeMsg(false, '✗ ' + pre.reason);
+    }
+  }
 
   applyModeUI();
   render();
