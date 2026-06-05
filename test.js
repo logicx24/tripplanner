@@ -233,6 +233,49 @@ test('paintRange does not mutate the baseline array', () => {
   assert.deepStrictEqual(baseline, copy);
 });
 
+// ---------- share-link compression ----------
+
+test('compressCodes/decompressCodes round-trips a joined-codes blob', async () => {
+  const token = T.encodeTripToken({ name: 'Trip', start: '2026-06-15', days: 30 });
+  const codes = ['Alice', 'Bob', 'Carol'].map((n, i) =>
+    makeCode(token, n, idx([i, i + 1, i + 2, 10, 11], 30))
+  );
+  const blob = codes.join(',');
+  const compressed = await T.compressCodes(blob);
+  const out = await T.decompressCodes(compressed);
+  assert.strictEqual(out, blob);
+});
+
+test('compressCodes shrinks a realistic 25-friend blob below ~40% of raw', async () => {
+  // The trip token is duplicated across every friend code, so deflate should
+  // collapse it hard. This guards against accidentally swapping to a non-
+  // dictionary compressor.
+  const token = T.encodeTripToken({ name: 'Summer Trip 2026', start: '2026-06-15', days: 90 });
+  const codes = [];
+  for (let i = 0; i < 25; i++) {
+    const free = new Array(90).fill(false).map((_, j) => (j + i) % 3 === 0);
+    codes.push(makeCode(token, 'Person ' + i, free));
+  }
+  const blob = codes.join(',');
+  const compressed = await T.compressCodes(blob);
+  assert.ok(
+    compressed.length < blob.length * 0.4,
+    `expected <${Math.floor(blob.length * 0.4)} chars, got ${compressed.length} (raw ${blob.length})`
+  );
+  assert.strictEqual(await T.decompressCodes(compressed), blob);
+});
+
+test('compressed payload survives loadCodes end-to-end with one bad code', async () => {
+  const token = T.encodeTripToken({ name: 'Trip', start: '2026-06-15', days: 5 });
+  const good = makeCode(token, 'Alice', [true, true, false, false, false]);
+  const blob = `${good},not-a-real-code!!!`;
+  const compressed = await T.compressCodes(blob);
+  const decoded = await T.decompressCodes(compressed);
+  const res = T.loadCodes(decoded);
+  assert.strictEqual(res.accepted.length, 1);
+  assert.strictEqual(res.rejected.length, 1);
+});
+
 // ---------- addDays (absolute date math) ----------
 
 test('addDays handles zero, month rollover, year rollover, and non-leap Feb', () => {

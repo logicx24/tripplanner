@@ -23,6 +23,11 @@
   .row > div { flex: 1; min-width: 140px; }
   button.primary { margin-top: 14px; padding: 10px 18px; background: var(--accent); color: #fff; border: none;
                    border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.95rem; }
+  button.secondary { margin-top: 14px; padding: 10px 18px; background: #fff; color: var(--accent);
+                     border: 1px solid var(--accent); border-radius: 8px; font-weight: 600; cursor: pointer;
+                     font-size: 0.95rem; }
+  button.secondary:disabled { color: #94a3b8; border-color: var(--line); cursor: not-allowed; }
+  .sharestatus { margin-left: 10px; color: var(--good); font-size: 0.9rem; }
   .linkbox { margin-top: 14px; display: none; }
   .linkbox.show { display: block; }
   .linkrow { display: flex; gap: 8px; }
@@ -84,6 +89,8 @@
     <label for="codes">Paste codes — commas, spaces, or newlines all work</label>
     <textarea id="codes" placeholder="paste one or many codes here…"></textarea>
     <button class="primary" id="load">Load codes</button>
+    <button class="secondary" id="share" disabled title="Loads codes first">Copy share link</button>
+    <span class="sharestatus" id="sharestatus"></span>
     <div id="loadstatus"></div>
   </section>
 
@@ -145,7 +152,10 @@
     state.people = res.accepted;
     state.excluded = {};
     renderLoadStatus(res);
-    if (res.trip && res.accepted.length) {
+    var ok = !!(res.trip && res.accepted.length);
+    el('share').disabled = !ok;
+    el('share').title = ok ? '' : 'Loads codes first';
+    if (ok) {
       el('analyze-section').style.display = '';
       renderPeople();
       recompute();
@@ -189,6 +199,34 @@
   el('load').addEventListener('click', function () {
     loadFromBlob(el('codes').value, true);
   });
+
+  // ---------- share link (compressed codes in URL hash) ----------
+  el('share').addEventListener('click', async function () {
+    if (!state.trip || !state.people.length) return;
+    // Rebuild canonical codes from accepted state — drops any rejected garbage
+    // the textarea may still hold. encode/decode of the trip token is byte-
+    // stable, so the rebuilt token matches what's embedded in friend codes.
+    var token = T.encodeTripToken(state.trip);
+    var codes = state.people.map(function (p) {
+      return T.encodeFriendCode({ trip: token, name: p.name, free: p.free });
+    });
+    try {
+      var compressed = await T.compressCodes(codes.join(','));
+      // href.split('#')[0] works on https://, http:// AND file:// (where
+      // location.origin is the literal string 'null'). Drops any old #c=.
+      var url = location.href.split('#')[0] + '#c=' + compressed;
+      if (navigator.clipboard) await navigator.clipboard.writeText(url);
+      else prompt('Copy this link:', url);
+      flashShareStatus('Copied ✓ (' + codes.length + ' code' + (codes.length === 1 ? '' : 's') + ')');
+    } catch (e) {
+      flashShareStatus('Copy failed: ' + e.message);
+    }
+  });
+  function flashShareStatus(msg) {
+    var s = el('sharestatus');
+    s.textContent = msg;
+    setTimeout(function () { if (s.textContent === msg) s.textContent = ''; }, 2000);
+  }
 
   // ---------- analyze controls ----------
   function renderPeople() {
@@ -282,12 +320,39 @@
     });
   }
 
-  // ---------- restore from localStorage ----------
-  var saved = localStorage.getItem(STORE_KEY);
-  if (saved) {
-    el('codes').value = saved;
-    loadFromBlob(saved, false);
-  }
+  // ---------- restore state ----------
+  // Priority: #c= in URL hash (shared/bookmarked link) → localStorage fallback.
+  // The hash payload is decompressed back to the canonical comma-joined codes
+  // string and flows through the same loadFromBlob path, so any stale code in
+  // a forwarded link surfaces in the same rejected list as a manual paste.
+  (async function restore() {
+    var hash = location.hash || '';
+    if (hash.indexOf('#c=') === 0) {
+      try {
+        var blob = await T.decompressCodes(hash.slice(3));
+        el('codes').value = blob;
+        loadFromBlob(blob, true);
+        return;
+      } catch (e) {
+        el('loadstatus').innerHTML =
+          '<div class="rejected" style="margin-top:10px">✗ Shared link is unreadable: ' +
+          escapeHtml(e.message) + '</div>';
+        // fall through to localStorage so a bad link doesn't blow away saved state
+      }
+    }
+    var saved = localStorage.getItem(STORE_KEY);
+    if (saved) {
+      el('codes').value = saved;
+      loadFromBlob(saved, false);
+    }
+  })();
+
+  // Catch the edge case where someone pastes a #c= link into the address bar
+  // of the same tab — that's a same-document navigation, so restore() above
+  // doesn't re-run. Reload the page so hash-priority logic kicks in cleanly.
+  window.addEventListener('hashchange', function () {
+    if ((location.hash || '').indexOf('#c=') === 0) location.reload();
+  });
 })();
 </script>
 </body>
