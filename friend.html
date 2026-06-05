@@ -124,7 +124,17 @@
 
   function showError(msg) {
     var e = document.getElementById('error');
-    e.textContent = msg;
+    // Anchor back to the landing page so a friend who hit this URL by mistake
+    // has a one-click recovery to the paste-your-trip-code form.
+    e.innerHTML = '';
+    e.appendChild(document.createTextNode(msg + ' '));
+    var a = document.createElement('a');
+    a.href = 'index.html';
+    a.textContent = 'Go to the landing page';
+    a.style.color = '#991b1b';
+    a.style.textDecoration = 'underline';
+    e.appendChild(a);
+    e.appendChild(document.createTextNode(' to paste your trip code.'));
     e.classList.remove('hidden');
   }
 
