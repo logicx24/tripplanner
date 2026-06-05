@@ -233,47 +233,72 @@ test('paintRange does not mutate the baseline array', () => {
   assert.deepStrictEqual(baseline, copy);
 });
 
-// ---------- share-link compression ----------
+// ---------- compact share format (v1) ----------
 
-test('compressCodes/decompressCodes round-trips a joined-codes blob', async () => {
-  const token = T.encodeTripToken({ name: 'Trip', start: '2026-06-15', days: 30 });
-  const codes = ['Alice', 'Bob', 'Carol'].map((n, i) =>
-    makeCode(token, n, idx([i, i + 1, i + 2, 10, 11], 30))
-  );
-  const blob = codes.join(',');
-  const compressed = await T.compressCodes(blob);
-  const out = await T.decompressCodes(compressed);
-  assert.strictEqual(out, blob);
+test('packShare/unpackShare round-trips trip + people with unicode names', () => {
+  const trip = { name: 'Café Trip ⛷️', start: '2026-06-15', days: 14 };
+  const people = [
+    { name: 'Renée 😀', free: idx([0, 3, 4, 10, 11], 14) },
+    { name: 'Bob', free: idx([1, 2, 13], 14) },
+  ];
+  const bytes = T.packShare(trip, people);
+  const out = T.unpackShare(bytes);
+  assert.deepStrictEqual(out.trip, trip);
+  assert.strictEqual(out.people.length, 2);
+  assert.strictEqual(out.people[0].name, 'Renée 😀');
+  assert.deepStrictEqual(out.people[0].free, people[0].free);
+  assert.deepStrictEqual(out.people[1].free, people[1].free);
 });
 
-test('compressCodes shrinks a realistic 25-friend blob below ~40% of raw', async () => {
-  // The trip token is duplicated across every friend code, so deflate should
-  // collapse it hard. This guards against accidentally swapping to a non-
-  // dictionary compressor.
-  const token = T.encodeTripToken({ name: 'Summer Trip 2026', start: '2026-06-15', days: 90 });
-  const codes = [];
-  for (let i = 0; i < 25; i++) {
-    const free = new Array(90).fill(false).map((_, j) => (j + i) % 3 === 0);
-    codes.push(makeCode(token, 'Person ' + i, free));
+test('packShare survives a non-byte-aligned days length (e.g. 90)', () => {
+  // 90 days = 11.25 bytes per bitmap → ceil to 12 bytes. The trailing 6 bits
+  // of the last byte are padding; unpack must read exactly `days` bits.
+  const trip = { name: 'Trip', start: '2026-06-15', days: 90 };
+  const free = new Array(90).fill(false);
+  [0, 1, 7, 8, 89].forEach(i => (free[i] = true));
+  const people = [{ name: 'A', free }];
+  const out = T.unpackShare(T.packShare(trip, people));
+  assert.deepStrictEqual(out.people[0].free, free);
+});
+
+test('unpackShare hard-rejects an unknown version byte', () => {
+  const bytes = new Uint8Array([99, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.throws(() => T.unpackShare(bytes), /unsupported share version/);
+});
+
+test('encodeShare/decodeShare round-trips realistic data and stays under budget', async () => {
+  const trip = { name: 'Summer Trip 2026', start: '2026-06-15', days: 90 };
+  const names = ['Aakash', 'Maya', 'Jordan', 'Priya', 'Sam', 'Riley', 'Wen', 'Devon'];
+  // Deterministic pseudo-random bitmaps so the size assertion is reproducible.
+  function rand(seed) {
+    let s = seed;
+    return () => {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      return s / 0x7fffffff;
+    };
   }
-  const blob = codes.join(',');
-  const compressed = await T.compressCodes(blob);
-  assert.ok(
-    compressed.length < blob.length * 0.4,
-    `expected <${Math.floor(blob.length * 0.4)} chars, got ${compressed.length} (raw ${blob.length})`
-  );
-  assert.strictEqual(await T.decompressCodes(compressed), blob);
-});
+  const r = rand(42);
+  const people = names.map(n => ({
+    name: n,
+    free: Array.from({ length: 90 }, () => r() < 0.3),
+  }));
 
-test('compressed payload survives loadCodes end-to-end with one bad code', async () => {
-  const token = T.encodeTripToken({ name: 'Trip', start: '2026-06-15', days: 5 });
-  const good = makeCode(token, 'Alice', [true, true, false, false, false]);
-  const blob = `${good},not-a-real-code!!!`;
-  const compressed = await T.compressCodes(blob);
-  const decoded = await T.decompressCodes(compressed);
-  const res = T.loadCodes(decoded);
-  assert.strictEqual(res.accepted.length, 1);
-  assert.strictEqual(res.rejected.length, 1);
+  const share = await T.encodeShare(trip, people);
+  const out = await T.decodeShare(share);
+  assert.deepStrictEqual(out.trip, trip);
+  assert.strictEqual(out.people.length, 8);
+  out.people.forEach((p, i) => {
+    assert.strictEqual(p.name, names[i]);
+    assert.deepStrictEqual(p.free, people[i].free);
+  });
+
+  // Size budget — guards against accidentally regressing to a verbose
+  // pre-compression layout. 350 chars leaves slack for compressor variance
+  // across node versions but is tight enough to catch real bloat.
+  assert.ok(
+    share.length < 350,
+    `expected #s= payload < 350 chars for 8 friends / 90 days, got ${share.length}`
+  );
 });
 
 // ---------- addDays (absolute date math) ----------

@@ -200,24 +200,18 @@
     loadFromBlob(el('codes').value, true);
   });
 
-  // ---------- share link (compressed codes in URL hash) ----------
+  // ---------- share link (compact binary payload, #s= v1) ----------
   el('share').addEventListener('click', async function () {
     if (!state.trip || !state.people.length) return;
-    // Rebuild canonical codes from accepted state — drops any rejected garbage
-    // the textarea may still hold. encode/decode of the trip token is byte-
-    // stable, so the rebuilt token matches what's embedded in friend codes.
-    var token = T.encodeTripToken(state.trip);
-    var codes = state.people.map(function (p) {
-      return T.encodeFriendCode({ trip: token, name: p.name, free: p.free });
-    });
     try {
-      var compressed = await T.compressCodes(codes.join(','));
-      // href.split('#')[0] works on https://, http:// AND file:// (where
-      // location.origin is the literal string 'null'). Drops any old #c=.
-      var url = location.href.split('#')[0] + '#c=' + compressed;
+      var share = await T.encodeShare(state.trip, state.people);
+      // href.split('#')[0] works on https://, http://, and file:// (where
+      // location.origin is the literal string 'null'). Drops any old #s=/#c=.
+      var url = location.href.split('#')[0] + '#s=' + share;
       if (navigator.clipboard) await navigator.clipboard.writeText(url);
       else prompt('Copy this link:', url);
-      flashShareStatus('Copied ✓ (' + codes.length + ' code' + (codes.length === 1 ? '' : 's') + ')');
+      var n = state.people.length;
+      flashShareStatus('Copied ✓ (' + n + ' code' + (n === 1 ? '' : 's') + ', ' + url.length + ' chars)');
     } catch (e) {
       flashShareStatus('Copy failed: ' + e.message);
     }
@@ -321,23 +315,43 @@
   }
 
   // ---------- restore state ----------
-  // Priority: #c= in URL hash (shared/bookmarked link) → localStorage fallback.
-  // The hash payload is decompressed back to the canonical comma-joined codes
-  // string and flows through the same loadFromBlob path, so any stale code in
-  // a forwarded link surfaces in the same rejected list as a manual paste.
+  // Priority: #s= (compact v1 share link) → localStorage. A malformed hash
+  // falls through to localStorage so a bad link can't destroy saved state.
+  function loadFromShare(trip, people) {
+    state.trip = trip;
+    state.people = people;
+    state.excluded = {};
+    el('share').disabled = !people.length;
+    el('share').title = people.length ? '' : 'Loads codes first';
+    // Synthesise canonical codes for the textarea — keeps the manual paste UI
+    // honest (people can still copy/edit individual codes if they want).
+    var token = T.encodeTripToken(trip);
+    var codes = people.map(function (p) {
+      return T.encodeFriendCode({ trip: token, name: p.name, free: p.free });
+    });
+    var blob = codes.join('\n');
+    el('codes').value = blob;
+    localStorage.setItem(STORE_KEY, blob);
+    el('analyze-section').style.display = '';
+    var s = el('loadstatus');
+    s.innerHTML = '<div style="margin-top:10px"><strong>' + escapeHtml(trip.name) + '</strong> · ' +
+      fmt(trip.start) + ' – ' + fmt(T.addDays(trip.start, trip.days - 1)) + '</div>' +
+      '<div class="accepted">✓ Loaded ' + people.length + ': ' +
+      escapeHtml(people.map(function (p) { return p.name; }).join(', ')) + '</div>';
+    renderPeople();
+    recompute();
+  }
+
   (async function restore() {
     var hash = location.hash || '';
-    if (hash.indexOf('#c=') === 0) {
+    if (hash.indexOf('#s=') === 0) {
       try {
-        var blob = await T.decompressCodes(hash.slice(3));
-        el('codes').value = blob;
-        loadFromBlob(blob, true);
+        var out = await T.decodeShare(hash.slice(3));
+        loadFromShare(out.trip, out.people);
         return;
       } catch (e) {
-        el('loadstatus').innerHTML =
-          '<div class="rejected" style="margin-top:10px">✗ Shared link is unreadable: ' +
-          escapeHtml(e.message) + '</div>';
-        // fall through to localStorage so a bad link doesn't blow away saved state
+        el('loadstatus').innerHTML = '<div class="rejected" style="margin-top:10px">' +
+          '✗ Shared link is unreadable: ' + escapeHtml(e.message) + '</div>';
       }
     }
     var saved = localStorage.getItem(STORE_KEY);
@@ -347,11 +361,11 @@
     }
   })();
 
-  // Catch the edge case where someone pastes a #c= link into the address bar
-  // of the same tab — that's a same-document navigation, so restore() above
-  // doesn't re-run. Reload the page so hash-priority logic kicks in cleanly.
+  // Catch the edge case where someone pastes a #s= link into the address bar
+  // of the same tab — that's a same-document navigation, so restore() doesn't
+  // re-run. Reload so hash-priority logic kicks in cleanly.
   window.addEventListener('hashchange', function () {
-    if ((location.hash || '').indexOf('#c=') === 0) location.reload();
+    if ((location.hash || '').indexOf('#s=') === 0) location.reload();
   });
 })();
 </script>
